@@ -73,3 +73,10 @@ def import_from_string(dotted_path):
     except AttributeError:
         msg = 'Module "%s" does not define a "%s" attribute/class' % (module_path, class_name)
         raise ImportError(msg)
+
+def schatten(A: Tensor, B: Tensor, p: float=2.0):
+    _, s, _ = (A @ B.permute([0,2,1])).svd()
+    if p is not None:
+        return (s ** p).sum(1) ** (1/p)
+    else:
+        return s.max(1)

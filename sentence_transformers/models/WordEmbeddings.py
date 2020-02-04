@@ -30,7 +30,7 @@ class WordEmbeddings(nn.Module):
         self.max_seq_length = max_seq_length
 
     def forward(self, features):
-        token_embeddings = self.emb_layer(features['input_ids'])
+        token_embeddings = self.emb_layer(features['input_ids'].to(torch.int64))
         cls_tokens = None
         features.update({'token_embeddings': token_embeddings, 'cls_token_embeddings': cls_tokens, 'input_mask': features['input_mask']})
         return features

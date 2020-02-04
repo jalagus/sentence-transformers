@@ -18,6 +18,7 @@ class Pooling(nn.Module):
                  pooling_mode_max_tokens: bool = False,
                  pooling_mode_mean_tokens: bool = True,
                  pooling_mode_mean_sqrt_len_tokens: bool = False,
+                 pooling_mode_quadratic: bool = False,
                  ):
         super(Pooling, self).__init__()
 
@@ -28,8 +29,9 @@ class Pooling(nn.Module):
         self.pooling_mode_mean_tokens = pooling_mode_mean_tokens
         self.pooling_mode_max_tokens = pooling_mode_max_tokens
         self.pooling_mode_mean_sqrt_len_tokens = pooling_mode_mean_sqrt_len_tokens
+        self.pooling_mode_quadratic = pooling_mode_quadratic        
 
-        pooling_mode_multiplier = sum([pooling_mode_cls_token, pooling_mode_max_tokens, pooling_mode_mean_tokens, pooling_mode_mean_sqrt_len_tokens])
+        pooling_mode_multiplier = sum([pooling_mode_cls_token, pooling_mode_max_tokens, pooling_mode_mean_tokens, pooling_mode_mean_sqrt_len_tokens, pooling_mode_quadratic])
         self.pooling_output_dimension = (pooling_mode_multiplier * word_embedding_dimension)
 
     def forward(self, features: Dict[str, Tensor]):
@@ -39,6 +41,9 @@ class Pooling(nn.Module):
 
         ## Pooling strategy
         output_vectors = []
+        if self.pooling_mode_quadratic:
+            _, sigma, v = token_embeddings.svd()
+            output_vectors.append(v[:,:,0] * sigma[:,:1])        
         if self.pooling_mode_cls_token:
             output_vectors.append(cls_token)
         if self.pooling_mode_max_tokens:
