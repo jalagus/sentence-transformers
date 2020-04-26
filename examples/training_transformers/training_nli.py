@@ -1,7 +1,13 @@
 """
-The system trains T5 on the SNLI + MultiNLI (AllNLI) dataset
+The system trains BERT (or any other transformer model like RoBERTa, DistilBERT etc.) on the SNLI + MultiNLI (AllNLI) dataset
 with softmax loss function. At every 1000 training steps, the model is evaluated on the
 STS benchmark dataset
+
+Usage:
+python training_nli.py
+
+OR
+python training_nli.py pretrained_transformer_model_name
 """
 from torch.utils.data import DataLoader
 import math
@@ -11,6 +17,7 @@ from sentence_transformers.evaluation import EmbeddingSimilarityEvaluator
 from sentence_transformers.readers import *
 import logging
 from datetime import datetime
+import sys
 
 #### Just some code to print debug information to stdout
 logging.basicConfig(format='%(asctime)s - %(message)s',
@@ -19,19 +26,19 @@ logging.basicConfig(format='%(asctime)s - %(message)s',
                     handlers=[LoggingHandler()])
 #### /print debug information to stdout
 
+#You can specify any huggingface/transformers pre-trained model here, for example, bert-base-uncased, roberta-base, xlm-roberta-base
+model_name = sys.argv[1] if len(sys.argv) > 1 else 'bert-base-uncased'
 
 # Read the dataset
-model_name = 't5-small'
 batch_size = 16
-nli_reader = NLIDataReader('datasets/AllNLI')
-sts_reader = STSDataReader('datasets/stsbenchmark')
+nli_reader = NLIDataReader('../datasets/AllNLI')
+sts_reader = STSBenchmarkDataReader('../datasets/stsbenchmark')
 train_num_labels = nli_reader.get_num_labels()
-model_save_path = 'output/training_nli_'+model_name+'-'+datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+model_save_path = 'output/training_nli_'+model_name.replace("/", "-")+'-'+datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
-
-# Use BERT for mapping tokens to embeddings
-word_embedding_model = models.T5(model_name)
+# Use Huggingface/transformers model (like BERT, RoBERTa, XLNet, XLM-R) for mapping tokens to embeddings
+word_embedding_model = models.Transformer(model_name)
 
 # Apply mean pooling to get one fixed sized sentence vector
 pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension(),
@@ -58,7 +65,7 @@ evaluator = EmbeddingSimilarityEvaluator(dev_dataloader)
 # Configure the training
 num_epochs = 1
 
-warmup_steps = math.ceil(len(train_dataloader) * num_epochs * 0.1) #10% of train data for warm-up
+warmup_steps = math.ceil(len(train_dataloader) * num_epochs / batch_size * 0.1) #10% of train data for warm-up
 logging.info("Warmup-steps: {}".format(warmup_steps))
 
 

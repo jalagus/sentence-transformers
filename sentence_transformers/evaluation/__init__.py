@@ -7,3 +7,4 @@ from .LabelAccuracyEvaluator import LabelAccuracyEvaluator
 from .SequentialEvaluator import SequentialEvaluator
 from .TripletEvaluator import TripletEvaluator
 from .MatrixEmbeddingSimilarityEvaluator import MatrixEmbeddingSimilarityEvaluator
+from .MSEEvaluator import MSEEvaluator

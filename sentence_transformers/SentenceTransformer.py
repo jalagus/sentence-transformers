@@ -29,7 +29,7 @@ class SentenceTransformer(nn.Sequential):
             logging.info("Load pretrained SentenceTransformer: {}".format(model_name_or_path))
 
             if '/' not in model_name_or_path and '\\' not in model_name_or_path and not os.path.isdir(model_name_or_path):
-                logging.info("Did not find a / or \\ in the name. Assume to download model from server")
+                logging.info("Did not find a '/' or '\\' in the name. Assume to download model from server.")
                 model_name_or_path = __DOWNLOAD_SERVER__ + model_name_or_path + '.zip'
 
             if model_name_or_path.startswith('http://') or model_name_or_path.startswith('https://'):
@@ -46,7 +46,6 @@ class SentenceTransformer(nn.Sequential):
                 default_cache_path = os.path.join(torch_cache_home, 'sentence_transformers')
                 model_path = os.path.join(default_cache_path, folder_name)
                 os.makedirs(model_path, exist_ok=True)
-
 
                 if not os.listdir(model_path):
                     if model_url[-1] is "/":
@@ -87,22 +86,29 @@ class SentenceTransformer(nn.Sequential):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
             logging.info("Use pytorch device: {}".format(device))
+
         self.device = torch.device(device)
         self.to(device)
 
-    def encode(self, sentences: List[str], batch_size: int = 8, show_progress_bar: bool = None) -> List[ndarray]:
+    def encode(self, sentences: List[str], batch_size: int = 8, show_progress_bar: bool = None, output_value: str = 'sentence_embedding', convert_to_numpy: bool = True) -> List[ndarray]:
         """
-       Computes sentence embeddings
+        Computes sentence embeddings
 
-       :param sentences:
+        :param sentences:
            the sentences to embed
-       :param batch_size:
+        :param batch_size:
            the batch size used for the computation
-       :param show_progress_bar:
+        :param show_progress_bar:
             Output a progress bar when encode sentences
-       :return:
-           a list with ndarrays of the embeddings for each sentence
-       """
+        :param output_value:
+            Default sentence_embedding, to get sentence embeddings. Can be set to token_embeddings
+            to get wordpiece token embeddings.
+        :param convert_to_numpy:
+            If true, the output is a list of numpy vectors. Else, it is a list of pytorch tensors.
+        :return:
+           Depending on convert_to_numpy, either a list of numpy vectors or a list of pytorch tensors
+        """
+        self.eval()
         if show_progress_bar is None:
             show_progress_bar = (logging.getLogger().getEffectiveLevel()==logging.INFO or logging.getLogger().getEffectiveLevel()==logging.DEBUG)
 
@@ -137,11 +143,22 @@ class SentenceTransformer(nn.Sequential):
                     features[feature_name].append(sentence_features[feature_name])
 
             for feature_name in features:
-                features[feature_name] = torch.tensor(np.asarray(features[feature_name])).to(self.device)
+                #features[feature_name] = torch.tensor(np.asarray(features[feature_name])).to(self.device)
+                features[feature_name] = torch.cat(features[feature_name]).to(self.device)
 
             with torch.no_grad():
-                embeddings = self.forward(features)
-                embeddings = embeddings['sentence_embedding'].to('cpu').numpy()
+                out_features = self.forward(features)
+                embeddings = out_features[output_value]
+
+                if output_value == 'token_embeddings':
+                    #Set token embeddings to 0 for padding tokens
+                    input_mask = out_features['input_mask']
+                    input_mask_expanded = input_mask.unsqueeze(-1).expand(embeddings.size()).float()
+                    embeddings = embeddings * input_mask_expanded
+
+                if convert_to_numpy:
+                    embeddings = embeddings.to('cpu').numpy()
+
                 all_embeddings.extend(embeddings)
 
         reverting_order = np.argsort(length_sorted_idx)
@@ -219,16 +236,20 @@ class SentenceTransformer(nn.Sequential):
         for idx in range(num_texts):
             max_len = max_seq_len[idx]
             feature_lists = {}
+
             for text in paired_texts[idx]:
                 sentence_features = self.get_sentence_features(text, max_len)
 
                 for feature_name in sentence_features:
                     if feature_name not in feature_lists:
                         feature_lists[feature_name] = []
+
                     feature_lists[feature_name].append(sentence_features[feature_name])
 
+
             for feature_name in feature_lists:
-                feature_lists[feature_name] = torch.tensor(np.asarray(feature_lists[feature_name]))
+                #feature_lists[feature_name] = torch.tensor(np.asarray(feature_lists[feature_name]))
+                feature_lists[feature_name] = torch.cat(feature_lists[feature_name])
 
             features.append(feature_lists)
 
@@ -240,7 +261,8 @@ class SentenceTransformer(nn.Sequential):
             train_objectives: Iterable[Tuple[DataLoader, nn.Module]],
             evaluator: SentenceEvaluator,
             epochs: int = 1,
-            scheduler_str: str = 'WarmupLinear',
+            steps_per_epoch = None,
+            scheduler: str = 'WarmupLinear',
             warmup_steps: int = 10000,
             optimizer_class: Type[Optimizer] = transformers.AdamW,
             optimizer_params : Dict[str, object ]= {'lr': 2e-5, 'eps': 1e-6, 'correct_bias': False},
@@ -261,7 +283,7 @@ class SentenceTransformer(nn.Sequential):
         to make sure of equal training with each dataset.
 
         :param weight_decay:
-        :param scheduler_str:
+        :param scheduler:
         :param warmup_steps:
         :param optimizer:
         :param evaluation_steps:
@@ -275,6 +297,7 @@ class SentenceTransformer(nn.Sequential):
             Tuples of DataLoader and LossConfig
         :param evaluator:
         :param epochs:
+        :param steps_per_epoch: Train for x steps in each epoch. If set to None, the length of the dataset will be used
         """
         if output_path is not None:
             os.makedirs(output_path, exist_ok=True)
@@ -289,20 +312,24 @@ class SentenceTransformer(nn.Sequential):
             dataloader.collate_fn = self.smart_batching_collate
 
         loss_models = [loss for _, loss in train_objectives]
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = self.device
+
         for loss_model in loss_models:
             loss_model.to(device)
 
-        self.best_score = -9999
+        self.best_score = -9999999
 
-        min_batch_size = min([len(dataloader) for dataloader in dataloaders])
-        num_train_steps = int(min_batch_size * epochs)
+        if steps_per_epoch is None or steps_per_epoch == 0:
+            steps_per_epoch = min([len(dataloader) for dataloader in dataloaders])
+
+        num_train_steps = int(steps_per_epoch * epochs)
 
         # Prepare optimizers
         optimizers = []
         schedulers = []
         for loss_model in loss_models:
             param_optimizer = list(loss_model.named_parameters())
+
             no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
             optimizer_grouped_parameters = [
                 {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': weight_decay},
@@ -313,10 +340,10 @@ class SentenceTransformer(nn.Sequential):
                 t_total = t_total // torch.distributed.get_world_size()
 
             optimizer = optimizer_class(optimizer_grouped_parameters, **optimizer_params)
-            scheduler = self._get_scheduler(optimizer, scheduler=scheduler_str, warmup_steps=warmup_steps, t_total=t_total)
+            scheduler_obj = self._get_scheduler(optimizer, scheduler=scheduler, warmup_steps=warmup_steps, t_total=t_total)
 
             optimizers.append(optimizer)
-            schedulers.append(scheduler)
+            schedulers.append(scheduler_obj)
 
         if fp16:
             try:
@@ -324,15 +351,16 @@ class SentenceTransformer(nn.Sequential):
             except ImportError:
                 raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
 
-            for idx in range(len(loss_models)):
-                model, optimizer = amp.initialize(loss_models[idx], optimizers[idx], opt_level=fp16_opt_level)
-                loss_models[idx] = model
-                optimizers[idx] = optimizer
+            for train_idx in range(len(loss_models)):
+                model, optimizer = amp.initialize(loss_models[train_idx], optimizers[train_idx], opt_level=fp16_opt_level)
+                loss_models[train_idx] = model
+                optimizers[train_idx] = optimizer
 
         global_step = 0
         data_iterators = [iter(dataloader) for dataloader in dataloaders]
 
         num_train_objectives = len(train_objectives)
+
         for epoch in trange(epochs, desc="Epoch"):
             training_steps = 0
 
@@ -340,38 +368,37 @@ class SentenceTransformer(nn.Sequential):
                 loss_model.zero_grad()
                 loss_model.train()
 
-            for step in trange(num_train_objectives * min_batch_size, desc="Iteration"):
-                idx = step % num_train_objectives
+            for _ in trange(steps_per_epoch, desc="Iteration", smoothing=0.05):
+                for train_idx in range(num_train_objectives):
+                    loss_model = loss_models[train_idx]
+                    optimizer = optimizers[train_idx]
+                    scheduler = schedulers[train_idx]
+                    data_iterator = data_iterators[train_idx]
 
-                loss_model = loss_models[idx]
-                optimizer = optimizers[idx]
-                scheduler = schedulers[idx]
-                data_iterator = data_iterators[idx]
+                    try:
+                        data = next(data_iterator)
+                    except StopIteration:
+                        #logging.info("Restart data_iterator")
+                        data_iterator = iter(dataloaders[train_idx])
+                        data_iterators[train_idx] = data_iterator
+                        data = next(data_iterator)
 
-                try:
-                    data = next(data_iterator)
-                except StopIteration:
-                    logging.info("Restart data_iterator")
-                    data_iterator = iter(dataloaders[idx])
-                    data_iterators[idx] = data_iterator
-                    data = next(data_iterator)
+                    features, labels = batch_to_device(data, self.device)
+                    loss_value = loss_model(features, labels)
 
-                features, labels = batch_to_device(data, self.device)
-                loss_value = loss_model(features, labels)
+                    if fp16:
+                        with amp.scale_loss(loss_value, optimizer) as scaled_loss:
+                            scaled_loss.backward()
+                        torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), max_grad_norm)
+                    else:
+                        loss_value.backward()
+                        torch.nn.utils.clip_grad_norm_(loss_model.parameters(), max_grad_norm)
 
-                if fp16:
-                    with amp.scale_loss(loss_value, optimizer) as scaled_loss:
-                        scaled_loss.backward()
-                    torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), max_grad_norm)
-                else:
-                    loss_value.backward()
-                    torch.nn.utils.clip_grad_norm_(loss_model.parameters(), max_grad_norm)
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad()
 
                 training_steps += 1
-
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
                 global_step += 1
 
                 if evaluation_steps > 0 and training_steps % evaluation_steps == 0:

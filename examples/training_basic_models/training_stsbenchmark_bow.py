@@ -1,8 +1,8 @@
 """
-This example runs a BiLSTM after the word embedding lookup. The output of the BiLSTM is than pooled,
-for example with max-pooling (which gives a system like InferSent) or with mean-pooling.
+This example uses a simple bag-of-words (BoW) approach. A sentence is mapped
+to a sparse vector with e.g. 25,000 dimensions. Optionally, you can also use tf-idf.
 
-Note, you can also pass BERT embeddings to the BiLSTM.
+To make the model trainable, we add multiple dense layers to create a Deep Averaging Network (DAN).
 """
 import torch
 from torch.utils.data import DataLoader
@@ -11,6 +11,7 @@ from sentence_transformers import models, losses
 from sentence_transformers import SentencesDataset, LoggingHandler, SentenceTransformer
 from sentence_transformers.evaluation import EmbeddingSimilarityEvaluator
 from sentence_transformers.readers import *
+from sentence_transformers.models.tokenizer.WordTokenizer import ENGLISH_STOP_WORDS
 import logging
 from datetime import datetime
 
@@ -23,24 +24,42 @@ logging.basicConfig(format='%(asctime)s - %(message)s',
 
 # Read the dataset
 batch_size = 32
-sts_reader = STSDataReader('datasets/stsbenchmark')
-model_save_path = 'output/training_stsbenchmark_bilstm-'+datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+sts_reader = STSBenchmarkDataReader('../datasets/stsbenchmark')
+model_save_path = 'output/training_tf-idf_word_embeddings-'+datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
 
-# Map tokens to traditional word embeddings like GloVe
-word_embedding_model = models.WordEmbeddings.from_text_file('glove.6B.300d.txt.gz')
-
-lstm = models.LSTM(word_embedding_dimension=word_embedding_model.get_word_embedding_dimension(), hidden_dim=1024)
-
-# Apply mean pooling to get one fixed sized sentence vector
-pooling_model = models.Pooling(lstm.get_word_embedding_dimension(),
-                               pooling_mode_mean_tokens=False,
-                               pooling_mode_cls_token=False,
-                               pooling_mode_max_tokens=True)
+# Create the vocab for the BoW model
+stop_words = ENGLISH_STOP_WORDS
+max_vocab_size = 25000 #This is also the size of the BoW sentence vector.
 
 
-model = SentenceTransformer(modules=[word_embedding_model, lstm, pooling_model])
+#Read the most common max_vocab_size words. Skip stop-words
+vocab = set()
+weights = {}
+lines = open('wikipedia_doc_frequencies.txt', encoding='utf8').readlines()
+num_docs = int(lines[0])
+for line in lines[1:]:
+    word, freq = line.lower().strip().split("\t")
+    if word in stop_words:
+        continue
+
+    vocab.add(word)
+    weights[word] = math.log(num_docs/int(freq))
+
+    if len(vocab) >= max_vocab_size:
+        break
+
+#Create the BoW model. Because we set word_weights to the IDF values and cumulative_term_frequency=True, we
+#get tf-idf vectors. Set word_weights to an empty dict and cumulative_term_frequency=False to get a 1-hot sentence encoding
+bow = models.BoW(vocab=vocab, word_weights=weights, cumulative_term_frequency=True)
+
+# Add two trainable feed-forward networks (DAN) with max_vocab_size -> 768 -> 512 dimensions.
+sent_embeddings_dimension = max_vocab_size
+dan1 = models.Dense(in_features=sent_embeddings_dimension, out_features=768)
+dan2 = models.Dense(in_features=768, out_features=512)
+
+model = SentenceTransformer(modules=[bow, dan1, dan2])
 
 
 # Convert the dataset to a DataLoader ready for training

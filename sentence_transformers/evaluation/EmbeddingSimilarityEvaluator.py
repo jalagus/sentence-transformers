@@ -44,7 +44,7 @@ class EmbeddingSimilarityEvaluator(SentenceEvaluator):
         self.show_progress_bar = show_progress_bar
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.csv_file: str = "similarity_evaluation"+name+"_results.csv"
+        self.csv_file = "similarity_evaluation"+name+"_results.csv"
         self.csv_headers = ["epoch", "steps", "cosine_pearson", "cosine_spearman", "euclidean_pearson", "euclidean_spearman", "manhattan_pearson", "manhattan_spearman", "dot_pearson", "dot_spearman"]
 
     def __call__(self, model: 'SequentialSentenceEmbedder', output_path: str = None, epoch: int = -1, steps: int = -1) -> float:
@@ -55,9 +55,9 @@ class EmbeddingSimilarityEvaluator(SentenceEvaluator):
 
         if epoch != -1:
             if steps == -1:
-                out_txt = f" after epoch {epoch}:"
+                out_txt = " after epoch {}:".format(epoch)
             else:
-                out_txt = f" in epoch {epoch} after {steps} steps:"
+                out_txt = " in epoch {} after {} steps:".format(epoch, steps)
         else:
             out_txt = ":"
 
